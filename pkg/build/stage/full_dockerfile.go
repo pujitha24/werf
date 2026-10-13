@@ -13,6 +13,7 @@ import (
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
 	"github.com/moby/buildkit/frontend/dockerfile/parser"
 	"github.com/moby/buildkit/frontend/dockerfile/shell"
+	"github.com/samber/lo"
 
 	"github.com/werf/common-go/pkg/util"
 	"github.com/werf/logboek"
@@ -573,6 +574,47 @@ func (s *FullDockerfileStage) dockerfileInstructionDependencies(ctx context.Cont
 		dependencies = append(dependencies, c.String())
 		if c.From == "" {
 			resolvedSources, err := resolveSourcesFunc(c.SourcePaths)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			checksum, err := s.calculateFilesChecksum(ctx, giterminismManager, resolvedSources, c.String())
+			if err != nil {
+				return nil, nil, err
+			}
+			dependencies = append(dependencies, checksum)
+		}
+	case *instructions.RunCommand:
+		resolvedValue, err := resolveValueFunc(c.String())
+		if err != nil {
+			return nil, nil, err
+		}
+
+		dependencies = append(dependencies, resolvedValue)
+
+		mountFroms := lo.Map(instructions.GetMounts(c), func(mount *instructions.Mount, _ int) string {
+			return mount.From
+		})
+
+		if err := c.Expand(resolveValueFunc); err != nil {
+			return nil, nil, fmt.Errorf("expand RUN mounts: %w", err)
+		}
+
+		// Expand re-parses the mounts from the raw flags, dropping the stage references
+		// already resolved to stage indexes in the shared instruction.
+		for i, mount := range instructions.GetMounts(c) {
+			mount.From = mountFroms[i]
+		}
+
+		var mountSources []string
+		for _, mount := range instructions.GetMounts(c) {
+			if mount.Type == instructions.MountTypeBind && mount.From == "" && mount.Source != "" {
+				mountSources = append(mountSources, mount.Source)
+			}
+		}
+
+		if len(mountSources) > 0 {
+			resolvedSources, err := resolveSourcesFunc(mountSources)
 			if err != nil {
 				return nil, nil, err
 			}

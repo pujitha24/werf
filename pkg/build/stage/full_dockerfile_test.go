@@ -284,6 +284,31 @@ COPY $SRC/file /payload
 		})
 	})
 
+	When("RUN has a bind mount from the build context", func() {
+		It("should change dockerfile stage digest when the mounted file has changed", func(ctx SpecContext) {
+			dockerfile := []byte(`
+FROM alpine:latest
+RUN --mount=type=bind,source=uv.lock,target=uv.lock cat uv.lock
+`)
+			dockerStages, dockerMetaArgs := testDockerfileToDockerStages(dockerfile)
+			stage := newTestFullDockerfileStage(dockerfile, "", nil, dockerStages, dockerMetaArgs, nil, "")
+			stage.dockerignorePathMatcher = path_matcher.NewTruePathMatcher()
+
+			gitRepo := &pathMatchingGitRepoStub{LocalGitRepoStub: NewLocalGitRepoStub("commit-1"), path: "uv.lock"}
+			conveyor := NewConveyorStubForDependencies(NewGiterminismManagerStub(gitRepo, NewGiterminismInspectorStub()), nil)
+			containerBackend := NewContainerBackendStub()
+
+			before, err := stage.GetDependencies(ctx, conveyor, containerBackend, nil, nil, nil)
+			Expect(err).To(Succeed())
+
+			gitRepo.headCommitHash = "commit-2"
+			after, err := stage.GetDependencies(ctx, conveyor, containerBackend, nil, nil, nil)
+			Expect(err).To(Succeed())
+
+			Expect(after).NotTo(Equal(before))
+		})
+	})
+
 	When("Dockerfile uses run with mount from another stage", func() {
 		It("should change dockerfile stage digest when base stage context has changed", func(ctx context.Context) {
 			dockerfile := []byte(`
